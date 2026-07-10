@@ -23,11 +23,12 @@ execute_wp_commands() {
 
     # 実行するコマンドのリストを配列で設定
     wp_commands=(
+		"echo SiteURL : $(wp option get blogname --path=$wp_dir)"
 		"echo SiteURL : $(wp option get home --path=$wp_dir)"
 		"echo Version : $(wp core version --path=$wp_dir)"
         "echo admin_email : $(wp option get admin_email --path=$wp_dir)"
-		"wp core verify-checksums"
-		"wp plugin verify-checksums --all"
+        "echo wp db size : $(wp db size --format=json --path=$wp_dir)"
+        "echo folder size : $(du -sh $wp_dir)"
     )
 
     # コマンドをまとめて1つのシェルコマンドにする
