@@ -4,7 +4,7 @@ search_dir="$1"
 # 引数が渡されていない場合はエラーメッセージを表示して終了
 if [ -z "$search_dir" ]; then
     echo "エラー: 対象ディレクトリを引数でセットしてください"
-	echo "curl xxxxx -s /example.com/public_html"
+    echo "curl xxxxx -s /example.com/public_html"
     echo "Usage: $0 <search_directory>"
     exit 1
 fi
@@ -21,33 +21,22 @@ search_dir=$(cd "$search_dir" && pwd)
 execute_wp_commands() {
     local wp_dir=$1
 
-    # 実行するコマンドのリストを配列で設定
-    wp_commands=(
-		"echo SiteURL : $(wp option get blogname --path=$wp_dir)"
-		"echo SiteURL : $(wp option get home --path=$wp_dir)"
-		"echo Version : $(wp core version --path=$wp_dir)"
-        "echo admin_email : $(wp option get admin_email --path=$wp_dir)"
-        "echo wp db size : $(wp db size --format=json --path=$wp_dir)"
-        "echo folder size : $(du -sh $wp_dir)"
-    )
+    # eval は使わない。WP の option 値（blogname/home 等）は改ざんされ得る
+    # 信頼できない値なので、eval で再解釈するとコマンドインジェクションになる。
+    # $(...) の出力は echo の引数になるだけで再解釈されないため安全。
+    echo --------------------------------------------------
+    echo "Executing combined commands in $wp_dir"
+    echo "SiteName    : $(wp option get blogname    --path="$wp_dir")"
+    echo "SiteURL     : $(wp option get home        --path="$wp_dir")"
+    echo "Version     : $(wp core version           --path="$wp_dir")"
+    echo "admin_email : $(wp option get admin_email --path="$wp_dir")"
+    echo "wp db size  : $(wp db size --format=json   --path="$wp_dir")"
+    echo "folder size : $(du -sh "$wp_dir")"
 
-    # コマンドをまとめて1つのシェルコマンドにする
-    combined_command=""
-    for wp_command in "${wp_commands[@]}"; do
-        combined_command+="$wp_command && "
-    done
-
-    # 最後の '&&' を取り除く
-    combined_command=${combined_command%&& }
-
-    # wp-config.phpが存在するディレクトリに移動
-    cd "$wp_dir"
-
-    # すべてのコマンドをまとめて実行
-	echo --------------------------------------------------
-	echo "Executing combined commands in $wp_dir"
-	eval "$combined_command"
-	echo --------------------------------------------------
+    # ファイル改ざん検知（このツールの中核）
+    wp core verify-checksums --path="$wp_dir"
+    wp plugin verify-checksums --all --path="$wp_dir"
+    echo --------------------------------------------------
 }
 
 # 再帰的にwp-config.phpが存在するディレクトリを検索
