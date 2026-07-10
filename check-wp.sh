@@ -9,6 +9,13 @@ if [ -z "$search_dir" ]; then
     exit 1
 fi
 
+# 相対パスで渡されても cd の副作用を受けないよう絶対パスに変換
+if [ ! -d "$search_dir" ]; then
+    echo "エラー: ディレクトリが存在しません: $search_dir"
+    exit 1
+fi
+search_dir=$(cd "$search_dir" && pwd)
+
 
 # 実行するWPコマンドを関数化
 execute_wp_commands() {
@@ -43,10 +50,10 @@ execute_wp_commands() {
 }
 
 # 再帰的にwp-config.phpが存在するディレクトリを検索
-find "$search_dir" -type f -name "wp-config.php" | while read wp_config; do
-    # wp-config.phpが存在するディレクトリを取得
+find "$search_dir" -type f -name "wp-config.php" | while IFS= read -r wp_config; do
+    # search_dir が絶対パスなので find の結果も絶対パス → dirname も絶対パス
     wp_dir=$(dirname "$wp_config")
 
-    # WPコマンドを実行する関数を呼び出し
-    execute_wp_commands "$wp_dir"
+    # cd の副作用がループに残らないようサブシェルで実行
+    ( execute_wp_commands "$wp_dir" )
 done
