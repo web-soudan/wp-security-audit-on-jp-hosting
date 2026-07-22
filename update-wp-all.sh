@@ -34,7 +34,7 @@ execute_wp_commands() {
     echo "folder size : $(du -sh "$wp_dir")"
 
     # Update All
-    wp update --path="$wp_dir"
+    wp core update --path="$wp_dir"
     wp plugin update --all --path="$wp_dir"
     wp theme update --all --path="$wp_dir"
     wp language core update --path="$wp_dir"
