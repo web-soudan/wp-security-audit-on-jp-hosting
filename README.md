@@ -10,9 +10,11 @@
 | `check-wp-noverify.sh` | 情報収集のみ（整合性検証を省いた軽量・高速版） | なし（読み取り専用） |
 | `update-wp-all.sh` | 情報収集 **＋ 一括アップデート**（コア/プラグイン/テーマ/翻訳） | **あり（更新を実行）** |
 | `check-log-and-file-sakura.sh` | さくら向け: `~/log/access_*.gz` から過去N日分のアクセスログを検索 | なし（読み取り専用） |
+| `check-files-by-date-sakura.sh` | さくら向け: 指定した日付範囲に**作成された**ファイルをホーム配下から検索 | なし（読み取り専用） |
 
 `check-wp.sh` / `check-wp-noverify.sh` / `update-wp-all.sh` は、指定ディレクトリ配下の `wp-config.php` を再帰的に探し、見つかった各 WordPress インストールに対して処理を実行します。
 `check-log-and-file-sakura.sh` はさくらインターネットのレンタルサーバーを対象に、ホームフォルダの `~/log/` にある gzip 圧縮アクセスログを検索します（→ [アクセスログの検索](#アクセスログの検索-check-log-and-file-sakurash)）。
+`check-files-by-date-sakura.sh` は同じくさくら向けで、ホーム配下（除外フォルダを除く）から作成日時が指定範囲内のファイルを探します（→ [作成日でファイルを検索](#作成日でファイルを検索-check-files-by-date-sakurash)）。
 
 ## 収集する情報（3スクリプト共通）
 
@@ -43,6 +45,7 @@
   - `check-wp.sh` / `check-wp-noverify.sh`: 読み取り権限
   - `update-wp-all.sh`: 更新を行うため書き込み権限
 - `check-log-and-file-sakura.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。さくらインターネットのレンタルサーバーを想定
+- `check-files-by-date-sakura.sh` は WP-CLI 不要。作成日時(birth time)の判定に BSD 系の `find -newerBt` / `stat -f` を使うため、FreeBSD（さくら）・macOS で動作（GNU/Linux は非対応）
 
 ## 使用方法
 
@@ -111,6 +114,51 @@ curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hos
 
 `bash -s --` の後ろに `<検索パターン> <日数>` を渡します。日数を省略すると対話入力になります（cron 等の端末が無い環境では第2引数での指定が必要です）。
 
+## 作成日でファイルを検索（`check-files-by-date-sakura.sh`）
+
+さくらインターネットのレンタルサーバーではドキュメントルートを自由な名前で作成できるため、**ホーム配下（`$HOME`）を丸ごと走査**し、除外フォルダ（既定は `~/log`）以外から、**指定した日付範囲に作成されたファイル**を列挙します。新規アップロードされた不審ファイルの発見を想定しています。
+
+- 「作成」の判定はファイルの **birth time（作成日時）**。`touch` で改ざんしにくく、`mtime`（更新日時）より「いつ作られたか」の判断に適します。
+- 除外フォルダはスクリプト内の `excludes` 配列で管理します（既定 `~/log`。`~/.ssh` 等を追記して拡張可）。
+- 第1引数: 開始日（`YYYY-MM-DD`）
+- 第2引数: 終了日（`YYYY-MM-DD`）
+- 日付を引数で渡さない場合は `/dev/tty` から対話入力するため、`curl ... | bash` でもプロンプトを表示できます。
+
+範囲は「開始日 00:00:00 〜 終了日 23:59:59」で、両端の日を含みます。
+
+### ローカルで実行する場合
+
+```bash
+# 対話入力（開始日・終了日をプロンプトで指定）
+bash check-files-by-date-sakura.sh
+
+# 引数で指定（2026-07-01〜2026-07-08 に作成されたファイル）
+bash check-files-by-date-sakura.sh 2026-07-01 2026-07-08
+```
+
+### curl で実行する場合
+
+```bash
+# 対話入力（/dev/tty から日付を読む）
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-files-by-date-sakura.sh | bash
+
+# 引数で指定（非対話）
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-files-by-date-sakura.sh | bash -s -- 2026-07-01 2026-07-08
+```
+
+#### 出力例
+
+```
+走査対象     : /home/example
+除外フォルダ : /home/example/log
+作成日時範囲 : 2026-07-01 00:00:00 〜 2026-07-08 23:59:59
+--------------------------------------------------
+2026-07-03 14:22:10  /home/example/www/wp-content/uploads/2026/07/shell.php
+2026-07-05 09:01:44  /home/example/mydocroot/upload.php
+--------------------------------------------------
+該当件数 : 2
+```
+
 ## 出力例
 
 ```
@@ -149,6 +197,6 @@ MIT
 
 ## 注意事項
 
-- `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
+- `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` / `check-files-by-date-sakura.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
 - **`update-wp-all.sh` はサイトを実際に更新します。** 実行前に必ずバックアップを取得し、検証環境で確認してから本番に適用してください。
 - チェックサム検証に失敗した場合は、ファイルが改ざんされている可能性があります。
