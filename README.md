@@ -11,10 +11,12 @@
 | `update-wp-all.sh` | 情報収集 **＋ 一括アップデート**（コア/プラグイン/テーマ/翻訳） | **あり（更新を実行）** |
 | `check-log-and-file-sakura.sh` | さくら向け: `~/log/access_*.gz` から過去N日分のアクセスログを検索 | なし（読み取り専用） |
 | `check-files-by-date-sakura.sh` | さくら向け: 指定した日付範囲に**作成された**ファイルをホーム配下から検索 | なし（読み取り専用） |
+| `check-log-and-file-xserver.sh` | エックスサーバー向け: `public_html` を再帰検索して公開フォルダ(ドメイン)を特定し、各ドメインの `log/ドメイン名.access_log_*.gz` から過去N日分のアクセスログを検索 | なし（読み取り専用） |
 
 `check-wp.sh` / `check-wp-noverify.sh` / `update-wp-all.sh` は、指定ディレクトリ配下の `wp-config.php` を再帰的に探し、見つかった各 WordPress インストールに対して処理を実行します。
 `check-log-and-file-sakura.sh` はさくらインターネットのレンタルサーバーを対象に、ホームフォルダの `~/log/` にある gzip 圧縮アクセスログを検索します（→ [アクセスログの検索](#アクセスログの検索-check-log-and-file-sakurash)）。
 `check-files-by-date-sakura.sh` は同じくさくら向けで、ホーム配下（除外フォルダを除く）から作成日時が指定範囲内のファイルを探します（→ [作成日でファイルを検索](#作成日でファイルを検索-check-files-by-date-sakurash)）。
+`check-log-and-file-xserver.sh` はエックスサーバーを対象に、ホーム配下から `public_html` を再帰的に探して公開フォルダ(ドメイン)を特定し、各ドメインフォルダの `log/` にある gzip 圧縮アクセスログを検索します（→ [アクセスログの検索（エックスサーバー）](#アクセスログの検索エックスサーバー-check-log-and-file-xserversh)）。
 
 ## 収集する情報（3スクリプト共通）
 
@@ -46,6 +48,7 @@
   - `update-wp-all.sh`: 更新を行うため書き込み権限
 - `check-log-and-file-sakura.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。さくらインターネットのレンタルサーバーを想定
 - `check-files-by-date-sakura.sh` は WP-CLI 不要。作成日時(birth time)の判定に BSD 系の `find -newerBt` / `stat -f` を使うため、FreeBSD（さくら）・macOS で動作（GNU/Linux は非対応）
+- `check-log-and-file-xserver.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。エックスサーバーのレンタルサーバーを想定（`~/ドメイン名/public_html` + `~/ドメイン名/log/` の構成）
 
 ## 使用方法
 
@@ -113,6 +116,56 @@ curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hos
 ```
 
 `bash -s --` の後ろに `<検索パターン> <日数>` を渡します。日数を省略すると対話入力になります（cron 等の端末が無い環境では第2引数での指定が必要です）。
+
+## アクセスログの検索（エックスサーバー）（`check-log-and-file-xserver.sh`）
+
+エックスサーバーはドメインごとに `~/ドメイン名/public_html`（公開フォルダ）と `~/ドメイン名/log/ドメイン名.access_log_YYYYMMDD.gz`（ログ）が対になっています（例: `~/eucalyption.me/public_html`, `~/eucalyption.me/log/eucalyption.me.access_log_20260721.gz`）。
+
+このスクリプトはホームフォルダ(`~`)以下を再帰的に検索して `public_html` フォルダ（公開フォルダ）を特定し、対応する各ドメインの `log/ドメイン名.access_log_*.gz` から、**過去 N 日分**を対象に指定パターン（既定 `/batch/v1`）を検索します。複数ドメインが見つかった場合はすべてのドメインのログをまとめて検索します。gz はストリーム解凍するためディスクには展開しません。
+
+- 第1引数: 検索パターン（省略時 `/batch/v1`）
+- 第2引数: 対象日数（省略時は端末から対話入力。Enter で 7 日）
+
+対象日数を引数で渡さない場合は `/dev/tty` から対話入力するため、`curl ... | bash` のパイプ実行でもプロンプトを表示できます。
+
+### ローカルで実行する場合
+
+```bash
+# 対話入力（日数をプロンプトで指定）
+bash check-log-and-file-xserver.sh
+
+# 引数で指定（パターン /batch/v1 を過去7日分から検索）
+bash check-log-and-file-xserver.sh /batch/v1 7
+```
+
+### curl で実行する場合
+
+```bash
+# 対話入力（/dev/tty から日数を読む）
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-log-and-file-xserver.sh | bash
+
+# 引数で指定（非対話）
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-log-and-file-xserver.sh | bash -s -- /batch/v1 7
+```
+
+`bash -s --` の後ろに `<検索パターン> <日数>` を渡します。日数を省略すると対話入力になります（cron 等の端末が無い環境では第2引数での指定が必要です）。
+
+#### 出力例
+
+```
+検出した公開フォルダ:
+  /home/example/eucalyption.me/public_html  (ドメイン名: eucalyption.me)
+--------------------------------------------------
+対象期間     : 過去 7 日
+対象ファイル : 2 件
+  /home/example/eucalyption.me/log/eucalyption.me.access_log_20260720.gz
+  /home/example/eucalyption.me/log/eucalyption.me.access_log_20260721.gz
+検索パターン : /batch/v1
+--------------------------------------------------
+203.0.113.10 - - [21/Jul/2026:10:12:33 +0900] "GET /batch/v1 HTTP/1.1" 200 512
+--------------------------------------------------
+マッチ件数 : 1
+```
 
 ## 作成日でファイルを検索（`check-files-by-date-sakura.sh`）
 
@@ -197,6 +250,6 @@ MIT
 
 ## 注意事項
 
-- `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` / `check-files-by-date-sakura.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
+- `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` / `check-files-by-date-sakura.sh` / `check-log-and-file-xserver.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
 - **`update-wp-all.sh` はサイトを実際に更新します。** 実行前に必ずバックアップを取得し、検証環境で確認してから本番に適用してください。
 - チェックサム検証に失敗した場合は、ファイルが改ざんされている可能性があります。
