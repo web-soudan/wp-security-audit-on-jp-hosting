@@ -12,12 +12,16 @@
 | `update-minor-wp-all.sh` | 情報収集 **＋ 一括アップデート**（コアは**マイナー更新のみ**、プラグイン/テーマ/翻訳） | **あり（更新を実行）** |
 | `check-log-and-file-sakura.sh` | さくら向け: `~/log/access_*.gz` から過去N日分のアクセスログを検索 | なし（読み取り専用） |
 | `check-files-by-date-sakura.sh` | さくら向け: 指定した日付範囲に**作成された**ファイルをホーム配下から検索 | なし（読み取り専用） |
+| `check-cve-2026-87902-sakura.sh` | さくら向け: アクセスログ（gz + 未圧縮）から CVE-2026-87902（パストラバーサル）の**攻撃試行痕跡**を検索 | なし（読み取り専用） |
 | `check-log-and-file-xserver.sh` | エックスサーバー向け: `public_html` を再帰検索して公開フォルダ(ドメイン)を特定し、各ドメインの `log/ドメイン名.access_log_*.gz` から過去N日分のアクセスログを検索 | なし（読み取り専用） |
+| `check-cve-2026-87902-xserver.sh` | エックスサーバー向け: 各ドメインのアクセスログ（gz + 未圧縮）から CVE-2026-87902（パストラバーサル）の**攻撃試行痕跡**を検索 | なし（読み取り専用） |
 
 `check-wp.sh` / `check-wp-noverify.sh` / `update-wp-all.sh` / `update-minor-wp-all.sh` は、指定ディレクトリ配下の `wp-config.php` を再帰的に探し、見つかった各 WordPress インストールに対して処理を実行します。
 `check-log-and-file-sakura.sh` はさくらインターネットのレンタルサーバーを対象に、ホームフォルダの `~/log/` にある gzip 圧縮アクセスログを検索します（→ [アクセスログの検索](#アクセスログの検索-check-log-and-file-sakurash)）。
 `check-files-by-date-sakura.sh` は同じくさくら向けで、ホーム配下（除外フォルダを除く）から作成日時が指定範囲内のファイルを探します（→ [作成日でファイルを検索](#作成日でファイルを検索-check-files-by-date-sakurash)）。
+`check-cve-2026-87902-sakura.sh` は同じくさくら向けで、`~/log/` のアクセスログから CVE-2026-87902 を狙った攻撃試行の痕跡を検索します（→ [CVE-2026-87902 の攻撃痕跡を検索](#cve-2026-87902-の攻撃痕跡を検索-check-cve-2026-87902-sakurash)）。
 `check-log-and-file-xserver.sh` はエックスサーバーを対象に、ホーム配下から `public_html` を再帰的に探して公開フォルダ(ドメイン)を特定し、各ドメインフォルダの `log/` にある gzip 圧縮アクセスログを検索します（→ [アクセスログの検索（エックスサーバー）](#アクセスログの検索エックスサーバー-check-log-and-file-xserversh)）。
+`check-cve-2026-87902-xserver.sh` は同じくエックスサーバー向けで、各ドメインのアクセスログから CVE-2026-87902 を狙った攻撃試行の痕跡を検索します（→ [CVE-2026-87902 の攻撃痕跡を検索（エックスサーバー）](#cve-2026-87902-の攻撃痕跡を検索エックスサーバー-check-cve-2026-87902-xserversh)）。
 
 ## 収集する情報（WordPress 検査・更新スクリプト共通）
 
@@ -53,7 +57,9 @@
   - `update-wp-all.sh` / `update-minor-wp-all.sh`: 更新を行うため書き込み権限
 - `check-log-and-file-sakura.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。さくらインターネットのレンタルサーバーを想定
 - `check-files-by-date-sakura.sh` は WP-CLI 不要。作成日時(birth time)の判定に BSD 系の `find -newerBt` / `stat -f` を使うため、FreeBSD（さくら）・macOS で動作（GNU/Linux は非対応）
+- `check-cve-2026-87902-sakura.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。さくらインターネットのレンタルサーバー（`~/log/` にアクセスログがある構成）を想定
 - `check-log-and-file-xserver.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。エックスサーバーのレンタルサーバーを想定（`~/ドメイン名/public_html` + `~/ドメイン名/log/` の構成）
+- `check-cve-2026-87902-xserver.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。同じくエックスサーバーの構成を想定
 
 ## 使用方法
 
@@ -178,6 +184,120 @@ curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hos
 マッチ件数 : 1
 ```
 
+## CVE-2026-87902 の攻撃痕跡を検索（`check-cve-2026-87902-sakura.sh`）
+
+さくらインターネットのレンタルサーバーで、ホームフォルダの `~/log/` にあるアクセスログから、CVE-2026-87902（WordPress の page-template パストラバーサル）を狙った**攻撃試行の痕跡**を検索します。gz 圧縮ログ（`access_*.gz`）だけでなく**未圧縮のログ**も対象にします（直近の攻撃はまだ圧縮されていない当日ログに残ることが多いため）。gz はストリーム解凍するためディスクには展開しません。
+
+- 第1引数: 検知パターン（`grep -E -i` の拡張正規表現。省略または空文字で既定パターン）
+  - 既定パターンは、生・URLエンコード双方のパストラバーサル痕（`../` / `..%2f` / `%2e%2e/` / `..\` など）
+- 第2引数: 対象日数（省略時は端末から対話入力。Enter で 14 日）
+- 対象ファイルは `find -mtime` で選ぶため、ログのファイル名書式に依存しません。
+- `pearcmd` / `php://` / `data://` / `expect://` / `phar://` / `/tmp/` / `/var/tmp/` を含む行は**高シグナル**として `[!]` 付きで強調表示します（LFI→RCE の定番ガジェットや、Web シェルの書き込み先として観測されている場所）。
+
+対象日数を引数で渡さない場合は `/dev/tty` から対話入力するため、`curl ... | bash` のパイプ実行でもプロンプトを表示できます。
+
+> **マッチ＝侵害成立ではありません。** 検出されるのは「攻撃の試行痕跡」です。ヒットしたサイトは要調査（WordPress の更新状況と公開ディレクトリのファイル点検）へ進んでください。
+> 逆に、**ヒットが無くても安全の保証にはなりません**（POST 経由・ログ削除済み・対象期間外の可能性）。修正版へ更新済みかを必ず別途確認してください。
+
+### ローカルで実行する場合
+
+```bash
+# 対話入力（日数をプロンプトで指定）
+bash check-cve-2026-87902-sakura.sh
+
+# 引数で指定（既定パターンを過去14日分から検索）
+bash check-cve-2026-87902-sakura.sh "" 14
+```
+
+### curl で実行する場合
+
+```bash
+# 対話入力（/dev/tty から日数を読む）
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-cve-2026-87902-sakura.sh | bash
+
+# 引数で指定（非対話）
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-cve-2026-87902-sakura.sh | bash -s -- "" 14
+```
+
+第1引数はパターン、第2引数は日数です。日数だけを指定したい場合は、第1引数に空文字 `""` を渡します（cron 等の端末が無い環境では第2引数での指定が必要です）。
+
+#### 出力例
+
+```
+対象:       CVE-2026-87902 (WordPress page-template パストラバーサル)
+対象期間:   過去 14 日
+対象ファイル: 3 件 (gz:2 / 未圧縮:1)
+  /home/example/log/access_20260910.gz
+  /home/example/log/access_20260911.gz
+  /home/example/log/access_log
+検知パターン: (\.\.(/|%2f|%5c|\\)|%2e%2e(/|%2f|%5c))
+--------------------------------------------------
+[!] 203.0.113.10 - - [11/Sep/2026:03:14:22 +0900] "GET /?page_template=../../../../tmp/pearcmd.php HTTP/1.1" 200 1024
+    198.51.100.7 - - [11/Sep/2026:04:02:51 +0900] "GET /?page_template=..%2f..%2fwp-config.php HTTP/1.1" 404 512
+--------------------------------------------------
+トラバーサル痕のヒット件数: 2
+うち高シグナル [!] 行:      1  (pearcmd / php:// 等 / tmp書込 を含む)
+
+=> 攻撃の【試行痕跡】が見つかりました。侵害成立の確定ではありません。
+```
+
+## CVE-2026-87902 の攻撃痕跡を検索（エックスサーバー）（`check-cve-2026-87902-xserver.sh`）
+
+`check-cve-2026-87902-sakura.sh` のエックスサーバー版です。検知パターン・`[!]` 高シグナル判定・判定メッセージはさくら版と同一で、**ログの探し方だけ**がエックスサーバーの構成に合わせてあります。
+
+ホームフォルダ(`~`)以下から `public_html` を再帰的に探して公開フォルダ(ドメイン)を特定し、各ドメインフォルダの `log/` にある `ドメイン名.access_log_*.gz`（gz）と `ドメイン名.access_log`（未圧縮の当日ログ）の両方を対象に、CVE-2026-87902（WordPress の page-template パストラバーサル）を狙った**攻撃試行の痕跡**を検索します。複数ドメインが見つかった場合はすべてまとめて検索します。gz はストリーム解凍するためディスクには展開しません。
+
+- 第1引数: 検知パターン（`grep -E -i` の拡張正規表現。省略または空文字で既定パターン）
+- 第2引数: 対象日数（省略時は端末から対話入力。Enter で 14 日）
+- 既定パターン・高シグナル語（`pearcmd` / `php://` / `data://` / `expect://` / `phar://` / `/tmp/` / `/var/tmp/`）はさくら版と同じです（→ [さくら版の説明](#cve-2026-87902-の攻撃痕跡を検索-check-cve-2026-87902-sakurash)）。
+
+> **マッチ＝侵害成立ではありません。** 検出されるのは「攻撃の試行痕跡」です。ヒットしたサイトは要調査（WordPress の更新状況と公開ディレクトリのファイル点検）へ進んでください。
+> 逆に、**ヒットが無くても安全の保証にはなりません**（POST 経由・ログ削除済み・対象期間外の可能性）。修正版へ更新済みかを必ず別途確認してください。
+
+### ローカルで実行する場合
+
+```bash
+# 対話入力（日数をプロンプトで指定）
+bash check-cve-2026-87902-xserver.sh
+
+# 引数で指定（既定パターンを過去14日分から検索）
+bash check-cve-2026-87902-xserver.sh "" 14
+```
+
+### curl で実行する場合
+
+```bash
+# 対話入力（/dev/tty から日数を読む）
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-cve-2026-87902-xserver.sh | bash
+
+# 引数で指定（非対話）
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-cve-2026-87902-xserver.sh | bash -s -- "" 14
+```
+
+#### 出力例
+
+```
+検出した公開フォルダ:
+  /home/example/eucalyption.me/public_html  (ドメイン名: eucalyption.me)
+  /home/example/example.com/public_html  (ドメイン名: example.com)
+--------------------------------------------------
+対象:       CVE-2026-87902 (WordPress page-template パストラバーサル)
+対象期間:   過去 14 日
+対象ファイル: 3 件 (gz:1 / 未圧縮:2)
+  /home/example/eucalyption.me/log/eucalyption.me.access_log_20260920.gz
+  /home/example/eucalyption.me/log/eucalyption.me.access_log
+  /home/example/example.com/log/example.com.access_log
+検知パターン: (\.\.(/|%2f|%5c|\\)|%2e%2e(/|%2f|%5c))
+--------------------------------------------------
+[!] 203.0.113.10 - - [11/Sep/2026:03:14:22 +0900] "GET /?page_template=../../../../tmp/pearcmd.php HTTP/1.1" 200 1024
+    198.51.100.7 - - [11/Sep/2026:04:02:51 +0900] "GET /?page_template=..%2F..%2Fwp-config.php HTTP/1.1" 404 512
+--------------------------------------------------
+トラバーサル痕のヒット件数: 2
+うち高シグナル [!] 行:      1  (pearcmd / php:// 等 / tmp書込 を含む)
+
+=> 攻撃の【試行痕跡】が見つかりました。侵害成立の確定ではありません。
+```
+
 ## 作成日でファイルを検索（`check-files-by-date-sakura.sh`）
 
 さくらインターネットのレンタルサーバーではドキュメントルートを自由な名前で作成できるため、**ホーム配下（`$HOME`）を丸ごと走査**し、除外フォルダ（既定は `~/log`）以外から、**指定した日付範囲に作成されたファイル**を列挙します。新規アップロードされた不審ファイルの発見を想定しています。
@@ -261,6 +381,6 @@ MIT
 
 ## 注意事項
 
-- `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` / `check-files-by-date-sakura.sh` / `check-log-and-file-xserver.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
+- `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` / `check-files-by-date-sakura.sh` / `check-log-and-file-xserver.sh` / `check-cve-2026-87902-sakura.sh` / `check-cve-2026-87902-xserver.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
 - **`update-wp-all.sh` / `update-minor-wp-all.sh` はサイトを実際に更新します。** 実行前に必ずバックアップを取得し、検証環境で確認してから本番に適用してください。
 - チェックサム検証に失敗した場合は、ファイルが改ざんされている可能性があります。
