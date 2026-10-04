@@ -58,6 +58,11 @@ sig_marker='(SC_[A-Za-z0-9_]{2,}|eth_call|eth_blockNumber|eth_getBalance|rpc\.an
 # 検出件数（[!] 行の数）
 findings=0
 
+# サイト別の結果（"件数 パス" の形で溜め、最後に一覧表示する）。
+# 件数に空白は入らないので、最初の空白までを件数、残りをパスとして扱える
+# （パス側に空白が含まれていても壊れない）。
+site_results=()
+
 hr() { echo "--------------------------------------------------"; }
 
 # 要調査として表示（件数をカウント）
@@ -127,6 +132,8 @@ check_site() {
     local content_dir="$wp_dir/wp-content"
     local list
     local db_ok=0
+    # このサイトだけの検出件数を出すため、開始時点の累計を控えておく
+    local before_findings=$findings
 
     hr
     echo "WordPress   : $wp_dir"
@@ -290,6 +297,7 @@ check_site() {
         fi
     fi
 
+    site_results+=("$(( findings - before_findings )) $wp_dir")
     hr
 }
 
@@ -336,7 +344,23 @@ for wp_dir in "${wp_dirs[@]}"; do
     check_site "$wp_dir"
 done
 
-echo "要調査として検出した項目: $findings 件"
+# --- 検査したサイトの一覧 -----------------------------------------------
+# 再帰検索で複数サイトが対象になった場合、どのサイトに痕跡があったのかを
+# 最後にまとめて示す（スクロールを遡らずに済むように）。
+sites_hit=0
+echo "検査したサイト: ${#site_results[@]} 件"
+for r in "${site_results[@]}"; do
+    n="${r%% *}"
+    d="${r#* }"
+    if [ "$n" -gt 0 ]; then
+        printf '  [!] %4s 件  %s\n' "$n" "$d"
+        sites_hit=$(( sites_hit + 1 ))
+    else
+        printf '  [ ] %4s 件  %s\n' "$n" "$d"
+    fi
+done
+echo
+echo "要調査として検出した項目: $findings 件（痕跡のあったサイト: ${sites_hit} / ${#site_results[@]}）"
 echo
 
 # --- 判定メッセージ ----------------------------------------------------
