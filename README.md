@@ -8,6 +8,7 @@
 |---|---|---|
 | `check-wp.sh` | 情報収集 **＋ 改ざん検知**（コア/プラグインの整合性検証） | なし（読み取り専用） |
 | `check-wp-noverify.sh` | 情報収集のみ（整合性検証を省いた軽量・高速版） | なし（読み取り専用） |
+| `check-sc.sh` | SC（自己修復型バックドア）の痕跡を検査（ファイル8層 + DB + 共有メモリ） | なし（読み取り専用） |
 | `update-wp-all.sh` | 情報収集 **＋ 一括アップデート**（コア/プラグイン/テーマ/翻訳） | **あり（更新を実行）** |
 | `update-minor-wp-all.sh` | 情報収集 **＋ 一括アップデート**（コアは**マイナー更新のみ**、プラグイン/テーマ/翻訳） | **あり（更新を実行）** |
 | `check-log-and-file-sakura.sh` | さくら向け: `~/log/access_*.gz` から過去N日分のアクセスログを検索 | なし（読み取り専用） |
@@ -17,6 +18,7 @@
 | `check-cve-2026-87902-xserver.sh` | エックスサーバー向け: 各ドメインのアクセスログ（gz + 未圧縮）から CVE-2026-87902（パストラバーサル）の**攻撃試行痕跡**を検索 | なし（読み取り専用） |
 
 `check-wp.sh` / `check-wp-noverify.sh` / `update-wp-all.sh` / `update-minor-wp-all.sh` は、指定ディレクトリ配下の `wp-config.php` を再帰的に探し、見つかった各 WordPress インストールに対して処理を実行します。
+`check-sc.sh` も同じく `wp-config.php` を再帰的に探し、各サイトで SC（自己修復型バックドア）の痕跡を検査します（→ [SC の痕跡を検索](#sc自己修復型バックドアの痕跡を検索-check-scsh)）。
 `check-log-and-file-sakura.sh` はさくらインターネットのレンタルサーバーを対象に、ホームフォルダの `~/log/` にある gzip 圧縮アクセスログを検索します（→ [アクセスログの検索](#アクセスログの検索-check-log-and-file-sakurash)）。
 `check-files-by-date-sakura.sh` は同じくさくら向けで、ホーム配下（除外フォルダを除く）から作成日時が指定範囲内のファイルを探します（→ [作成日でファイルを検索](#作成日でファイルを検索-check-files-by-date-sakurash)）。
 `check-cve-2026-87902-sakura.sh` は同じくさくら向けで、`~/log/` のアクセスログから CVE-2026-87902 を狙った攻撃試行の痕跡を検索します（→ [CVE-2026-87902 の攻撃痕跡を検索](#cve-2026-87902-の攻撃痕跡を検索-check-cve-2026-87902-sakurash)）。
@@ -55,6 +57,7 @@
 - 対象 WordPress ディレクトリへの権限
   - `check-wp.sh` / `check-wp-noverify.sh`: 読み取り権限
   - `update-wp-all.sh` / `update-minor-wp-all.sh`: 更新を行うため書き込み権限
+- `check-sc.sh` は WP-CLI が**あれば** DB 側（option / 隠し管理者 / cron / DBトリガー）も確認し、無い場合はファイル側のみ確認（`find` / `grep` を使用。共有メモリの確認には `ipcs` があれば使用）
 - `check-log-and-file-sakura.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。さくらインターネットのレンタルサーバーを想定
 - `check-files-by-date-sakura.sh` は WP-CLI 不要。作成日時(birth time)の判定に BSD 系の `find -newerBt` / `stat -f` を使うため、FreeBSD（さくら）・macOS で動作（GNU/Linux は非対応）
 - `check-cve-2026-87902-sakura.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。さくらインターネットのレンタルサーバー（`~/log/` にアクセスログがある構成）を想定
@@ -71,6 +74,9 @@ bash check-wp.sh <検索対象のディレクトリ>
 
 # 情報収集のみ（軽量・高速）
 bash check-wp-noverify.sh <検索対象のディレクトリ>
+
+# SC（自己修復型バックドア）の痕跡を検査
+bash check-sc.sh <検索対象のディレクトリ>
 
 # 一括アップデート（サイトを変更します）
 bash update-wp-all.sh <検索対象のディレクトリ>
@@ -95,6 +101,9 @@ curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hos
 
 # 情報収集のみ
 curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-wp-noverify.sh | bash -s -- /var/www/html/wordpress
+
+# SC（自己修復型バックドア）の痕跡を検査
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-sc.sh | bash -s -- /var/www/html/wordpress
 
 # 一括アップデート（サイトを変更します）
 curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/update-wp-all.sh | bash -s -- /var/www/html/wordpress
@@ -298,6 +307,80 @@ curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hos
 => 攻撃の【試行痕跡】が見つかりました。侵害成立の確定ではありません。
 ```
 
+## SC（自己修復型バックドア）の痕跡を検索（`check-sc.sh`）
+
+指定ディレクトリ配下の `wp-config.php` を再帰的に探し、見つかった各 WordPress に対して SC バックドアの痕跡を検査します。**読み取り専用**で、検出と報告のみを行います（マルウェアの削除や修正はしません）。
+
+- 参考: [The Hacker News の記事](https://thehackernews.com/2026/10/wordpress-backdoor-rebuilds-itself.html) / [Sucuri の分析](https://blog.sucuri.net/2026/09/sc-wordpress-malware-a-self-healing-mesh-of-loaders-drop-ins-and-a-blockchain-controlled-backdoor.html)
+- 第1引数: 検索対象ディレクトリ（必須）
+
+SC は単体のマルウェアファイルではなく、**複数の層が互いを再生成し合う構成**です。プラグインを消せばドロップインが書き戻し、ドロップインを消せばテーマが書き戻し、ディスク上を全部消しても次のアクセスで DB や共有メモリから一式が復元されます。そのため「1箇所を見つけて消す」のではなく、**痕跡の分布を一度に洗い出す**ことが初動になります。
+
+| # | チェック項目 | 位置づけ |
+|---|---|---|
+| 0 | SysV 共有メモリ（`ipcs -m`） | RAM 常駐。ファイル削除・DB 掃除でも消えない層 |
+| 1 | `.user.ini` / `php.ini` / `.htaccess` の `auto_prepend_file` | 全リクエストの最上流。除去も最初にここから |
+| 2 | ドロップイン `db.php` / `advanced-cache.php` / `object-cache.php` | WP 本体が自動で読み込む常駐先 |
+| 3 | `wp-content` 直下のランダム hex 名 PHP / ドットで始まる隠しPHP | `c1b12371.php` / `.c1b12371.php` 型のローダー |
+| 4 | `wp-content/mu-plugins` の PHP | 管理画面から無効化できない常駐先 |
+| 5 | ランダム hex 名の ZIP | ファイル一括削除後の復元元 |
+| 6 | PHP 内のシグネチャ（自己修復系 / 難読化系 / SC マーカー・Ethereum RPC） | C2 は公開 Ethereum RPC 経由 |
+| 7 | DB（巨大 option / Base64 のみの option / `sc_` 系 option / DBトリガー / 管理者一覧 / ランダム風 cron） | WP-CLI がある場合のみ |
+
+### WP-CLI の扱い
+
+- WP-CLI があれば DB 側も確認し、無ければファイル側だけを確認します（その旨を冒頭に表示）。
+- WP-CLI は `--skip-plugins --skip-themes` 付きで実行します。SC 自身がプラグインとして動作し、一覧や結果をフィルタで隠すためです。
+- DB に接続できない場合は「未確認」と明示します（「該当なし」とは区別。未確認を安全と誤解しないため）。
+
+### 誤検知・見逃しについて
+
+- ドロップイン（`db.php` 等）はキャッシュ系・DB 系プラグインが正規に作る場合があります。検出時はファイル内のシグネチャ有無も併記します。
+- `vendor` / `node_modules` / `tests` 配下と開発ツールの定番ドットファイル（`.phpstorm.meta.php` 等）は、本体の検出とは分けて**参考表示**にします。PHPUnit などが `shmop_open` や `auto_prepend_file` を文字列として列挙しているためです（除外ではなく分離。そこへの改ざんも有り得るため）。
+- ファイル名・option 名・cron フック名はサイト毎にランダム化されるため、**未検出＝安全の保証にはなりません**。
+
+### ローカルで実行する場合
+
+```bash
+bash check-sc.sh /home/example/public_html
+```
+
+### curl で実行する場合
+
+```bash
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-sc.sh | bash -s -- /home/example/public_html
+```
+
+#### 出力例（痕跡が見つかった場合の抜粋）
+
+```
+[1] auto_prepend_file（.user.ini / php.ini / .htaccess）
+[!] auto_prepend_file の指定を含む設定ファイルがあります（SC の最上流の仕掛け）
+      /home/example/public_html/.user.ini
+      /home/example/public_html/.user.ini:1:auto_prepend_file="/home/example/public_html/wp-content/.c1b12371.php"
+
+[2] ドロップイン（db.php / advanced-cache.php / object-cache.php）
+[!] /home/example/public_html/wp-content/db.php が存在します（キャッシュ/DB系プラグインが正規に作る場合もあり）
+[!]   └ 上記ファイルに難読化/自己修復系のパターンを検出 → 感染濃厚
+--------------------------------------------------
+要調査として検出した項目: 10 件
+
+=> SC で使われる配置と一致する項目が見つかりました。要調査です。
+```
+
+#### 検出時の除去順序
+
+SC は相互に再生成し合うため、**1箇所ずつ消すと必ず復活します**。Sucuri が示す順序を崩さずに進めてください（スクリプトの最後にも表示されます）。
+
+1. `auto_prepend_file`（`.user.ini` 等）を先に無効化する
+2. ディスク外のコピーを消す（option のペイロード・共有メモリ・制御 option）
+3. cron イベントと DB トリガーを削除する
+4. 隠し管理者アカウントを削除する
+5. ファイルを“一度に”消す（ローダー・シム・両方のプラグイン・ZIP・ドロップイン）
+6. 再スキャンし、ファイルが再生成されないか監視する
+
+並行して、認証情報（DB・管理者・API キー）のローテーションも必要です。
+
 ## 作成日でファイルを検索（`check-files-by-date-sakura.sh`）
 
 さくらインターネットのレンタルサーバーではドキュメントルートを自由な名前で作成できるため、**ホーム配下（`$HOME`）を丸ごと走査**し、除外フォルダ（既定は `~/log`）以外から、**指定した日付範囲に作成されたファイル**を列挙します。新規アップロードされた不審ファイルの発見を想定しています。
@@ -381,6 +464,6 @@ MIT
 
 ## 注意事項
 
-- `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` / `check-files-by-date-sakura.sh` / `check-log-and-file-xserver.sh` / `check-cve-2026-87902-sakura.sh` / `check-cve-2026-87902-xserver.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
+- `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` / `check-files-by-date-sakura.sh` / `check-log-and-file-xserver.sh` / `check-cve-2026-87902-sakura.sh` / `check-cve-2026-87902-xserver.sh` / `check-sc.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
 - **`update-wp-all.sh` / `update-minor-wp-all.sh` はサイトを実際に更新します。** 実行前に必ずバックアップを取得し、検証環境で確認してから本番に適用してください。
 - チェックサム検証に失敗した場合は、ファイルが改ざんされている可能性があります。
