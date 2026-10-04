@@ -314,6 +314,7 @@ curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hos
 - 参考: [The Hacker News の記事](https://thehackernews.com/2026/10/wordpress-backdoor-rebuilds-itself.html) / [Sucuri の分析](https://blog.sucuri.net/2026/09/sc-wordpress-malware-a-self-healing-mesh-of-loaders-drop-ins-and-a-blockchain-controlled-backdoor.html)
 - 第1引数: 検索対象ディレクトリ（必須）
 - 最後に、検査したサイトを**サイト別の検出件数つきで一覧表示**します。複数サイトを再帰検査したときに、どのサイトに痕跡があったのかを出力を遡らずに確認できます。
+- 要調査の `[!]` 行は端末では**赤の太字**で表示します。ファイルやパイプに流すときは制御文字を出力しません（`NO_COLOR=1` を指定しても色を無効化できます）。
 
 SC は単体のマルウェアファイルではなく、**複数の層が互いを再生成し合う構成**です。プラグインを消せばドロップインが書き戻し、ドロップインを消せばテーマが書き戻し、ディスク上を全部消しても次のアクセスで DB や共有メモリから一式が復元されます。そのため「1箇所を見つけて消す」のではなく、**痕跡の分布を一度に洗い出す**ことが初動になります。
 

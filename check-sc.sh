@@ -58,6 +58,20 @@ sig_obfus='(eval[[:space:]]*\([[:space:]]*(gzinflate|gzuncompress|base64_decode|
 #    POSIX ERE に後読みは無いので「行頭 or 英数字以外」で表現する（\b は非互換）。
 sig_marker='((^|[^A-Za-z0-9_])SC_[A-Za-z0-9_]{2,}|eth_call|eth_blockNumber|eth_getBalance|rpc\.ankr\.com|cloudflare-eth\.com|publicnode\.com|llamarpc\.com|infura\.io|drpc\.org|blockpi\.network|1rpc\.io|merkle\.io|rpc\.flashbots\.net)'
 
+# --- 表示色 ------------------------------------------------------------
+# [!] の行を目立たせる。端末に出力しているときだけ色を付け、ファイルや
+# パイプに流すときは制御文字が混ざらないよう無効にする。
+# NO_COLOR が設定されていれば色を使わない（https://no-color.org/）。
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    c_warn=$'\033[1;31m'   # 太字の赤（要調査）
+    c_bold=$'\033[1m'      # 太字（総括）
+    c_off=$'\033[0m'
+else
+    c_warn=''
+    c_bold=''
+    c_off=''
+fi
+
 # 検出件数（[!] 行の数）
 findings=0
 
@@ -70,7 +84,7 @@ hr() { echo "--------------------------------------------------"; }
 
 # 要調査として表示（件数をカウント）
 warn() {
-    echo "[!] $*"
+    echo "${c_warn}[!] $*${c_off}"
     findings=$(( findings + 1 ))
 }
 
@@ -427,19 +441,24 @@ done
 echo "検査したサイト: ${#site_results[@]} 件"
 # 共有メモリのようにサイトに紐づかない検出は、サイト別の内訳と合わないので別行で示す
 [ "$(( findings - site_total ))" -gt 0 ] &&
-    printf '  [!] %4s 件  （ホスト全体: 共有メモリなど）\n' "$(( findings - site_total ))"
+    printf '  %s[!] %4s 件%s  （ホスト全体: 共有メモリなど）\n' \
+        "$c_warn" "$(( findings - site_total ))" "$c_off"
 for r in "${site_results[@]}"; do
     n="${r%% *}"
     d="${r#* }"
     if [ "$n" -gt 0 ]; then
-        printf '  [!] %4s 件  %s\n' "$n" "$d"
+        printf '  %s[!] %4s 件%s  %s\n' "$c_warn" "$n" "$c_off" "$d"
         sites_hit=$(( sites_hit + 1 ))
     else
         printf '  [ ] %4s 件  %s\n' "$n" "$d"
     fi
 done
 echo
-echo "要調査として検出した項目: $findings 件（痕跡のあったサイト: ${sites_hit} / ${#site_results[@]}）"
+if [ "$findings" -gt 0 ]; then
+    echo "${c_warn}要調査として検出した項目: $findings 件（痕跡のあったサイト: ${sites_hit} / ${#site_results[@]}）${c_off}"
+else
+    echo "要調査として検出した項目: 0 件"
+fi
 echo
 
 # --- 判定メッセージ ----------------------------------------------------
@@ -450,8 +469,8 @@ if [ "$findings" -eq 0 ]; then
     echo "   WordPress 本体・プラグイン・テーマを最新に保ち、管理画面のプラグイン"
     echo "   一覧と \`wp plugin list\` の差分（管理画面から隠された分）も確認を。"
 else
-    echo "=> SC で使われる配置と一致する項目が見つかりました。要調査です。"
-    echo "   【重要】SC は相互に再生成し合うため、1箇所ずつ消すと必ず復活します。"
+    echo "${c_warn}=> SC で使われる配置と一致する項目が見つかりました。要調査です。${c_off}"
+    echo "${c_bold}   【重要】SC は相互に再生成し合うため、1箇所ずつ消すと必ず復活します。${c_off}"
     echo "   Sucuri が示す除去順序（この順番を崩さないこと）:"
     echo "     1. auto_prepend_file（.user.ini 等）を先に無効化する"
     echo "     2. ディスク外のコピーを消す（option のペイロード・共有メモリ・制御 option）"
