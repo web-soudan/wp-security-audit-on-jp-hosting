@@ -319,7 +319,7 @@ SC は単体のマルウェアファイルではなく、**複数の層が互い
 
 | # | チェック項目 | 位置づけ |
 |---|---|---|
-| 0 | SysV 共有メモリ（`ipcs -m`） | RAM 常駐。ファイル削除・DB 掃除でも消えない層 |
+| 0 | SysV 共有メモリ（`ipcs -m`） | RAM 常駐。ファイル削除・DB 掃除でも消えない層。**実行ユーザー所有のセグメントのみ**対象 |
 | 1 | `.user.ini` / `php.ini` / `.htaccess` の `auto_prepend_file` | 全リクエストの最上流。除去も最初にここから |
 | 2 | ドロップイン `db.php` / `advanced-cache.php` / `object-cache.php` | WP 本体が自動で読み込む常駐先 |
 | 3 | `wp-content` 直下のランダム hex 名 PHP / ドットで始まる隠しPHP | `c1b12371.php` / `.c1b12371.php` 型のローダー |
@@ -336,8 +336,20 @@ SC は単体のマルウェアファイルではなく、**複数の層が互い
 
 ### 誤検知・見逃しについて
 
+実サーバーでの実行結果をもとに、次の誤検知対策を入れています。
+
+| 対象 | 対策 |
+|---|---|
+| SC マーカー | `SC_` の先頭に境界を入れています（`(^\|[^A-Za-z0-9_])SC_`）。境界が無いと `DESC_` / `GSC_` / `WPSC_` / `MISC_` など正規プラグインの定数に部分一致します |
+| Wordfence 拡張保護 | `.user.ini` の `auto_prepend_file` が `wordfence-waf.php` を指し、その中身が標準形（`WFWAF` 定数を持ち検出パターンに当たらない）なら参考表示にします。改ざんされていれば警告に戻ります |
+| Wordfence / google-auth | `plugins/wordfence/` 配下と `google/auth/src/Cache/SysVCacheItemPool.php` は、共有メモリを正当な目的で使うため参考表示にします |
+| 共有メモリ | **実行ユーザー所有のセグメントだけ**を警告します。PHP は実行ユーザー権限で動くため、root 等 他ユーザー所有のセグメントはそのサイトの PHP からは作成できません |
+| hex 名 ZIP | `uploads/wpallexport/`（WP All Export が hex 名の ZIP を正規に作る）を除外します |
+| 開発用ライブラリ | `vendor` / `node_modules` / `tests` 配下と開発ツールの定番ドットファイル（`.phpstorm.meta.php` 等）は参考表示にします。PHPUnit などが `shmop_open` や `auto_prepend_file` を文字列として列挙しているためです |
+
+- 「参考表示」は**除外ではなく分離**です。件数と先頭5件を表示するので、そこへの追記という形の改ざんも目視できます。
 - ドロップイン（`db.php` 等）はキャッシュ系・DB 系プラグインが正規に作る場合があります。検出時はファイル内のシグネチャ有無も併記します。
-- `vendor` / `node_modules` / `tests` 配下と開発ツールの定番ドットファイル（`.phpstorm.meta.php` 等）は、本体の検出とは分けて**参考表示**にします。PHPUnit などが `shmop_open` や `auto_prepend_file` を文字列として列挙しているためです（除外ではなく分離。そこへの改ざんも有り得るため）。
+- 難読化実行系は、`admin-menu-editor` / `query-monitor` / BackupBuddy 拡張など正規プラグインでも検出されることがあります（プラグイン名による除外はしていません）。
 - ファイル名・option 名・cron フック名はサイト毎にランダム化されるため、**未検出＝安全の保証にはなりません**。
 
 ### ローカルで実行する場合
@@ -365,11 +377,12 @@ curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hos
 [!]   └ 上記ファイルに難読化/自己修復系のパターンを検出 → 感染濃厚
 --------------------------------------------------
 検査したサイト: 3 件
+  [!]    1 件  （ホスト全体: 共有メモリなど）
   [ ]    0 件  /home/example/clean.example.com/public_html
   [!]   10 件  /home/example/public_html
   [ ]    0 件  /home/example/sub.example.com/public_html
 
-要調査として検出した項目: 10 件（痕跡のあったサイト: 1 / 3）
+要調査として検出した項目: 11 件（痕跡のあったサイト: 1 / 3）
 
 => SC で使われる配置と一致する項目が見つかりました。要調査です。
 ```

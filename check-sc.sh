@@ -53,7 +53,10 @@ sig_persist='(shmop_open|shmop_read|shmop_write|ftok[[:space:]]*\(|auto_prepend_
 # 2) 難読化してその場で実行する定番形。
 sig_obfus='(eval[[:space:]]*\([[:space:]]*(gzinflate|gzuncompress|base64_decode|str_rot13)|(gzinflate|gzuncompress)[[:space:]]*\([[:space:]]*base64_decode|create_function[[:space:]]*\(|assert[[:space:]]*\([[:space:]]*base64_decode)'
 # 3) SC マーカーと、C2 に使われる Ethereum RPC ゲートウェイ。
-sig_marker='(SC_[A-Za-z0-9_]{2,}|eth_call|eth_blockNumber|eth_getBalance|rpc\.ankr\.com|cloudflare-eth\.com|publicnode\.com|llamarpc\.com|infura\.io|drpc\.org|blockpi\.network|1rpc\.io|merkle\.io|rpc\.flashbots\.net)'
+#    SC_ は先頭に境界を入れる。境界が無いと DESC_ / GSC_ / WPSC_ / MISC_ などの
+#    正規プラグインの定数に部分一致して誤検知が大量に出る。
+#    POSIX ERE に後読みは無いので「行頭 or 英数字以外」で表現する（\b は非互換）。
+sig_marker='((^|[^A-Za-z0-9_])SC_[A-Za-z0-9_]{2,}|eth_call|eth_blockNumber|eth_getBalance|rpc\.ankr\.com|cloudflare-eth\.com|publicnode\.com|llamarpc\.com|infura\.io|drpc\.org|blockpi\.network|1rpc\.io|merkle\.io|rpc\.flashbots\.net)'
 
 # 検出件数（[!] 行の数）
 findings=0
@@ -95,25 +98,64 @@ dev_path_re='/(vendor|node_modules|[Tt]ests?)/'
 # 開発ツールが置く定番のドット始まり PHP（.phpstorm.meta.php 等）も同様に参考扱い。
 dev_file_re='/\.(phpstorm\.meta|php-cs-fixer(\.dist)?|php_cs(\.dist)?|phpunit(\.dist)?|phpstan(\.dist)?)\.php$'
 
-# 検出パス一覧を、本体 / 開発用ライブラリ配下に分けて報告する
+# 正規のプラグイン/ライブラリが同じ関数を正当な目的で使っている既知のケース。
+#   - Wordfence: WAF が auto_prepend_file と共有メモリを使う
+#   - google/auth の SysVCacheItemPool.php: SysV 共有メモリでキャッシュする実装
+# これも除外ではなく参考表示に回す（そこへの追記という形の改ざんも在り得るため）。
+known_ok_re='/plugins/wordfence/|/google/auth/src/Cache/SysVCacheItemPool\.php$'
+
+# Wordfence の拡張保護は .user.ini で wordfence-waf.php を auto_prepend する。
+# 対象が wordfence-waf.php で、Wordfence の標準形（WFWAF 定数を持ち、本スクリプトの
+# 難読化/マーカーパターンに当たらない）なら正規の設定として扱う。
+is_wordfence_waf() {
+    local target="$1"
+    [ -n "$target" ] || return 1
+    case "${target##*/}" in
+        wordfence-waf.php) ;;
+        *) return 1 ;;
+    esac
+    [ -f "$target" ] || return 1
+    grep -q -- 'WFWAF' "$target" 2>/dev/null || return 1
+    # 標準形のファイルに追記された形の改ざんを取りこぼさないよう、
+    # 検出パターンに当たる場合は「正規」とは見なさない。
+    grep -q -E -- "$sig_obfus|$sig_marker" "$target" 2>/dev/null && return 1
+    return 0
+}
+
+# 検出パス一覧を、本体 / 参考（開発用ライブラリ・既知の正規利用）に分けて報告する。
+# wordfence-waf.php は「auto_prepend_file を消すな」という注意書きを含むため
+# [6] に引っかかる。中身が標準形のものだけ、1件ずつ判定して参考側へ回す。
 report_paths() {
-    local label="$1" list="$2" main dev n
+    local label="$1" list="$2" main='' aux='' line n
     if [ -z "$list" ]; then
         info "$label: 該当なし"
         return 0
     fi
-    main=$(printf '%s\n' "$list" | grep -v -E -- "$dev_path_re" | grep -v -E -- "$dev_file_re")
-    dev=$(printf '%s\n' "$list" | grep -E -- "$dev_path_re|$dev_file_re")
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        if printf '%s' "$line" | grep -q -E -- "$dev_path_re|$dev_file_re|$known_ok_re" ||
+            is_wordfence_waf "$line"; then
+            aux="$aux$line
+"
+        else
+            main="$main$line
+"
+        fi
+    done <<EOF
+$list
+EOF
+    main="${main%$'\n'}"
+    aux="${aux%$'\n'}"
     if [ -n "$main" ]; then
         warn "$label"
         print_list "$main"
     else
         info "$label: 該当なし（本体）"
     fi
-    if [ -n "$dev" ]; then
-        n=$(printf '%s\n' "$dev" | wc -l | tr -d ' ')
-        info "  └ 開発用ライブラリ/ツール配下に $n 件（PHPUnit の関数名列挙や CS Fixer の設定ファイル等、誤検知が大半）"
-        print_list "$dev" 5
+    if [ -n "$aux" ]; then
+        n=$(printf '%s\n' "$aux" | wc -l | tr -d ' ')
+        info "  └ 参考表示 $n 件（開発用ライブラリ/ツール配下、または Wordfence 等の正規利用）"
+        print_list "$aux" 5
     fi
     return 0
 }
@@ -156,11 +198,23 @@ check_site() {
     list=$(find "$wp_dir" -maxdepth 3 -type f \( -name '.user.ini' -o -name 'php.ini' -o -name '.htaccess' \) -print0 2>/dev/null |
         xargs -0 grep -l -i -- 'auto_prepend_file' 2>/dev/null | sort)
     if [ -n "$list" ]; then
-        warn "auto_prepend_file の指定を含む設定ファイルがあります（SC の最上流の仕掛け）"
-        print_list "$list"
-        printf '%s\n' "$list" | while IFS= read -r f; do
-            grep -n -i -- 'auto_prepend_file' "$f" 2>/dev/null | sed "s|^|      ${f}:|"
-        done
+        local cfg line target
+        while IFS= read -r cfg; do
+            [ -z "$cfg" ] && continue
+            line=$(grep -h -i -- 'auto_prepend_file' "$cfg" 2>/dev/null | head -1)
+            # auto_prepend_file = "/path/to/x.php" から読み込み先のパスだけを取り出す
+            target=$(printf '%s\n' "$line" |
+                sed -e 's/.*auto_prepend_file//' -e 's/^[^=]*=//' -e 's/^[[:space:]]*//' \
+                    -e "s/^[\"']//" -e "s/[\"'].*$//" -e 's/[[:space:]].*$//')
+            if is_wordfence_waf "$target"; then
+                info "$cfg: Wordfence 拡張保護の auto_prepend_file（標準形を確認）"
+            else
+                warn "$cfg に auto_prepend_file の指定があります（SC の最上流の仕掛け）"
+                grep -n -i -- 'auto_prepend_file' "$cfg" 2>/dev/null | sed 's/^/      /'
+            fi
+        done <<EOF
+$list
+EOF
     else
         info "該当なし"
     fi
@@ -218,9 +272,10 @@ check_site() {
     # --- (5) ランダム hex 名の ZIP（復元用バンドル）------------------------
     echo
     echo "[5] ランダム hex 名の ZIP（自己復元用バンドル）"
+    # WP All Export は uploads/wpallexport/ に hex 名の ZIP を正規に作るため除外する。
     report_paths "ランダム hex 名の ZIP（ファイル一括削除後の復元元）" \
         "$(find "$content_dir" "$content_dir/uploads" "$content_dir/themes" -type f -name '*.zip' 2>/dev/null |
-            grep -E '/[0-9a-f]{6,32}\.zip$' | sort -u)"
+            grep -E '/[0-9a-f]{6,32}\.zip$' | grep -v -E '/uploads/wpallexport/' | sort -u)"
 
     # --- (6) PHP ファイルのシグネチャ検索 ---------------------------------
     echo
@@ -329,12 +384,28 @@ fi
 hr
 echo "[0] SysV 共有メモリセグメント（ipcs -m）"
 if command -v ipcs >/dev/null 2>&1; then
-    shm=$(ipcs -m 2>/dev/null | sed '/^$/d')
-    if [ -n "$shm" ]; then
-        printf '%s\n' "$shm" | head -30 | sed 's/^/      /'
-        info "セグメントが存在する場合、キーと所有者を確認してください（共有ホスティングでは別アカウント所有のこともあります）"
-    else
+    me=$(id -un 2>/dev/null)
+    # セグメント行は Linux が "0x..." 始まり、BSD が "m " 始まり。
+    shm=$(ipcs -m 2>/dev/null | grep -E '^(m[[:space:]]|0x)')
+    if [ -z "$shm" ]; then
         info "セグメントなし"
+    elif [ -z "$me" ]; then
+        info "実行ユーザーを判定できないため、全セグメントを参考表示します"
+        print_list "$shm" 30
+    else
+        # PHP は実行ユーザーの権限で動くため、root 等 他ユーザー所有のセグメントは
+        # そのサイトの PHP からは作れない＝ SC のものではない。
+        shm_mine=$(printf '%s\n' "$shm" | grep -E "(^|[[:space:]])${me}([[:space:]]|$)")
+        shm_other=$(printf '%s\n' "$shm" | grep -v -E "(^|[[:space:]])${me}([[:space:]]|$)")
+        n_other=0
+        [ -n "$shm_other" ] && n_other=$(printf '%s\n' "$shm_other" | wc -l | tr -d ' ')
+        if [ -n "$shm_mine" ]; then
+            warn "実行ユーザー（${me}）所有の共有メモリセグメントがあります（キーと用途を確認してください）"
+            print_list "$shm_mine" 30
+        else
+            info "実行ユーザー（${me}）所有のセグメントなし"
+        fi
+        [ "$n_other" -gt 0 ] && info "他ユーザー所有のセグメント $n_other 件は、PHP から作成できないため対象外"
     fi
 else
     info "ipcs コマンドが無いため未確認"
@@ -348,7 +419,15 @@ done
 # 再帰検索で複数サイトが対象になった場合、どのサイトに痕跡があったのかを
 # 最後にまとめて示す（スクロールを遡らずに済むように）。
 sites_hit=0
+site_total=0
+for r in "${site_results[@]}"; do
+    site_total=$(( site_total + ${r%% *} ))
+done
+
 echo "検査したサイト: ${#site_results[@]} 件"
+# 共有メモリのようにサイトに紐づかない検出は、サイト別の内訳と合わないので別行で示す
+[ "$(( findings - site_total ))" -gt 0 ] &&
+    printf '  [!] %4s 件  （ホスト全体: 共有メモリなど）\n' "$(( findings - site_total ))"
 for r in "${site_results[@]}"; do
     n="${r%% *}"
     d="${r#* }"
