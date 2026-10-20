@@ -86,6 +86,7 @@ else
 fi
 
 tab=$(printf '\t')
+nl=$'\n'
 no_wp_label="(WordPress の外)"
 
 hr() { echo "--------------------------------------------------"; }
@@ -138,25 +139,52 @@ human() {
 # wp-load.php は WordPress のルートに必ずあるため、これを目印に上へ辿る
 # （wp-config.php は1つ上の階層に置ける構成があり、ルートの判定には使えない）。
 find_wp_root() {
-    local dir="$1"
+    local dir="$1" parent
+    # 絶対パス以外は辿らない（相対パスだと . から先に進めず無限ループになり、
+    # しかも実行時のカレントディレクトリ次第で別のサイトを指してしまう）
+    case "$dir" in
+        /*) ;;
+        *) return 1 ;;
+    esac
     while [ -n "$dir" ] && [ "$dir" != "/" ]; do
         if [ -f "$dir/wp-load.php" ]; then
             printf '%s\n' "$dir"
             return 0
         fi
-        dir=$(dirname "$dir")
+        parent=$(dirname "$dir")
+        # dirname が同じ値を返したら、それ以上は遡れないので打ち切る
+        [ "$parent" = "$dir" ] && break
+        dir="$parent"
     done
     return 1
 }
 
 # --- .wpress の収集 -----------------------------------------------------
+# 改ざんされたサイトでは、攻撃者がファイル名に改行やタブを仕込める。
+# 行区切りで受け取ると1つの名前が複数行に割れ、途中までのパスを別ファイルとして
+# 扱ってしまうため、NUL 区切りで受け取る。
 files=()
-while IFS= read -r f; do
-    files+=("$f")
-done < <(find "$search_dir" -type f -name '*.wpress' 2>/dev/null | sort)
+weird=()
+while IFS= read -r -d '' f; do
+    case "$f" in
+        *"$nl"*|*"$tab"*) weird+=("$f") ;;
+        *) files+=("$f") ;;
+    esac
+done < <(find "$search_dir" -type f -name '*.wpress' -print0 2>/dev/null)
 
 echo "対象:       All-in-One WP Migration のバックアップ (.wpress)"
 echo "走査対象:   $search_dir"
+
+# 改行やタブを含む名前は集計・削除の対象から外し、手動確認を促す。
+# 通常のバックアップには付かない名前なので、それ自体が確認すべき兆候でもある。
+if [ "${#weird[@]}" -gt 0 ]; then
+    echo "${c_warn}[!] ファイル名に改行やタブを含む .wpress が ${#weird[@]} 件あります${c_off}"
+    echo "    通常は付かない名前です。集計・削除の対象から外しました（制御文字は ? で表示）。"
+    for f in "${weird[@]}"; do
+        printf '      %s\n' "$(printf '%s' "$f" | tr "$nl$tab" '??')"
+    done
+    echo
+fi
 
 if [ "${#files[@]}" -eq 0 ]; then
     echo ".wpress は見つかりませんでした。"
@@ -277,17 +305,34 @@ if [ "$assume_yes" -eq 0 ]; then
     fi
 fi
 
+# search_dir が / のときに // で始まる判定パターンにならないようにする
+case "$search_dir" in
+    /) path_prefix="" ;;
+    *) path_prefix="$search_dir" ;;
+esac
+
 deleted=0
 failed=0
 freed=0
-while IFS="$tab" read -r root size path; do
-    [ -z "$path" ] && continue
+# 削除はテキストを読み直さず、収集した配列をそのまま辿る。
+# 途中でタブ区切りに変換しないので、名前の細工で対象がずれることがない。
+for path in "${files[@]}"; do
+    # 走査対象の配下にある .wpress であることを、消す直前にもう一度確かめる
+    case "$path" in
+        "$path_prefix"/*.wpress) ;;
+        *)
+            echo "${c_warn}[!] 走査対象外のパスのためスキップ: $path${c_off}"
+            failed=$(( failed + 1 ))
+            continue
+            ;;
+    esac
     # シンボリックリンク経由で想定外のファイルを消さないよう、実体だけを対象にする
     if [ -L "$path" ] || [ ! -f "$path" ]; then
         echo "[!] 実体のファイルではないためスキップ: $path"
         failed=$(( failed + 1 ))
         continue
     fi
+    size=$(file_size "$path")
     if rm -f -- "$path" 2>/dev/null && [ ! -e "$path" ]; then
         echo "削除: $path"
         deleted=$(( deleted + 1 ))
@@ -296,9 +341,7 @@ while IFS="$tab" read -r root size path; do
         echo "${c_warn}[!] 削除できませんでした（権限を確認してください）: $path${c_off}"
         failed=$(( failed + 1 ))
     fi
-done <<EOF
-$records
-EOF
+done
 
 hr
 echo "削除: ${deleted} 件 / 解放: $(human "$freed")"
