@@ -9,6 +9,7 @@
 | `check-wp.sh` | 情報収集 **＋ 改ざん検知**（コア/プラグインの整合性検証） | なし（読み取り専用） |
 | `check-wp-noverify.sh` | 情報収集のみ（整合性検証を省いた軽量・高速版） | なし（読み取り専用） |
 | `check-sc.sh` | SC（自己修復型バックドア）の痕跡を検査（ファイル8層 + DB + 共有メモリ） | なし（読み取り専用） |
+| `check-wpress.sh` | All-in-One WP Migration のバックアップ（`.wpress`）をドメイン別に棚卸し | 既定はなし（**`--delete` 指定時のみ削除**） |
 | `update-wp-all.sh` | 情報収集 **＋ 一括アップデート**（コア/プラグイン/テーマ/翻訳） | **あり（更新を実行）** |
 | `update-minor-wp-all.sh` | 情報収集 **＋ 一括アップデート**（コアは**マイナー更新のみ**、プラグイン/テーマ/翻訳） | **あり（更新を実行）** |
 | `check-log-and-file-sakura.sh` | さくら向け: `~/log/access_*.gz` から過去N日分のアクセスログを検索 | なし（読み取り専用） |
@@ -19,6 +20,7 @@
 
 `check-wp.sh` / `check-wp-noverify.sh` / `update-wp-all.sh` / `update-minor-wp-all.sh` は、指定ディレクトリ配下の `wp-config.php` を再帰的に探し、見つかった各 WordPress インストールに対して処理を実行します。
 `check-sc.sh` も同じく `wp-config.php` を再帰的に探し、各サイトで SC（自己修復型バックドア）の痕跡を検査します（→ [SC の痕跡を検索](#sc自己修復型バックドアの痕跡を検索-check-scsh)）。
+`check-wpress.sh` は `.wpress` から上へ辿って WordPress を特定し、公開ドメインごとにバックアップの件数とサイズを集計します（→ [.wpress の棚卸し](#all-in-one-wp-migration-のバックアップwpressを棚卸し-check-wpresssh)）。
 `check-log-and-file-sakura.sh` はさくらインターネットのレンタルサーバーを対象に、ホームフォルダの `~/log/` にある gzip 圧縮アクセスログを検索します（→ [アクセスログの検索](#アクセスログの検索-check-log-and-file-sakurash)）。
 `check-files-by-date-sakura.sh` は同じくさくら向けで、ホーム配下（除外フォルダを除く）から作成日時が指定範囲内のファイルを探します（→ [作成日でファイルを検索](#作成日でファイルを検索-check-files-by-date-sakurash)）。
 `check-cve-2026-87902-sakura.sh` は同じくさくら向けで、`~/log/` のアクセスログから CVE-2026-87902 を狙った攻撃試行の痕跡を検索します（→ [CVE-2026-87902 の攻撃痕跡を検索](#cve-2026-87902-の攻撃痕跡を検索-check-cve-2026-87902-sakurash)）。
@@ -58,6 +60,7 @@
   - `check-wp.sh` / `check-wp-noverify.sh`: 読み取り権限
   - `update-wp-all.sh` / `update-minor-wp-all.sh`: 更新を行うため書き込み権限
 - `check-sc.sh` は WP-CLI が**あれば** DB 側（option / 隠し管理者 / cron / DBトリガー）も確認し、無い場合はファイル側のみ確認（`find` / `grep` を使用。共有メモリの確認には `ipcs` があれば使用）
+- `check-wpress.sh` は WP-CLI が**あれば**公開ドメイン（`home`）を表示し、無い場合はパス表示になります（`find` / `awk` を使用）
 - `check-log-and-file-sakura.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。さくらインターネットのレンタルサーバーを想定
 - `check-files-by-date-sakura.sh` は WP-CLI 不要。作成日時(birth time)の判定に BSD 系の `find -newerBt` / `stat -f` を使うため、FreeBSD（さくら）・macOS で動作（GNU/Linux は非対応）
 - `check-cve-2026-87902-sakura.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。さくらインターネットのレンタルサーバー（`~/log/` にアクセスログがある構成）を想定
@@ -77,6 +80,9 @@ bash check-wp-noverify.sh <検索対象のディレクトリ>
 
 # SC（自己修復型バックドア）の痕跡を検査
 bash check-sc.sh <検索対象のディレクトリ>
+
+# .wpress の棚卸し（一覧・集計のみ）
+bash check-wpress.sh <検索対象のディレクトリ>
 
 # 一括アップデート（サイトを変更します）
 bash update-wp-all.sh <検索対象のディレクトリ>
@@ -104,6 +110,9 @@ curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hos
 
 # SC（自己修復型バックドア）の痕跡を検査
 curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-sc.sh | bash -s -- /var/www/html/wordpress
+
+# .wpress の棚卸し（一覧・集計のみ）
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-wpress.sh | bash -s -- /var/www/html/wordpress
 
 # 一括アップデート（サイトを変更します）
 curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/update-wp-all.sh | bash -s -- /var/www/html/wordpress
@@ -401,6 +410,58 @@ SC は相互に再生成し合うため、**1箇所ずつ消すと必ず復活�
 
 並行して、認証情報（DB・管理者・API キー）のローテーションも必要です。
 
+## All-in-One WP Migration のバックアップ（`.wpress`）を棚卸し（`check-wpress.sh`）
+
+指定ディレクトリ配下から `.wpress` を再帰的に探し、**公開ドメインごとに件数と合計サイズ**を集計します。既定は一覧・集計のみの読み取り専用で、`--delete` を付けたときだけ削除します。
+
+`.wpress` は All-in-One WP Migration が `wp-content/ai1wm-backups/` に作る「サイト丸ごと」のバックアップで、DB ダンプ（`wp-config.php` の情報や利用者の個人情報を含む）までまとまっています。置き場所の `.htaccess` は**ディレクトリの一覧表示を止めるだけ**で、ファイル名が分かれば URL を直接叩いて誰でもダウンロードできます。不要なバックアップは削除してください。
+
+```bash
+bash check-wpress.sh <検索対象のディレクトリ> [--delete] [--yes]
+```
+
+| オプション | 動作 |
+|---|---|
+| （なし） | 一覧・ドメイン別集計のみ（読み取り専用） |
+| `--delete` | 削除リストを表示 → 確認（`yes` の入力が必要）→ 削除 |
+| `--yes` | `--delete` の確認を省略（cron 等の非対話実行用） |
+
+- 非対話実行（端末が無い環境）で `--delete` だけを指定した場合は、誤爆防止のためエラー終了します。`--yes` を明示してください。
+- 削除対象は `.wpress` だけです。`ai1wm-backups` 内の `.htaccess` / `index.php` はプラグインの動作に必要なため残します。
+- 公開ドメインは、`.wpress` から上へ辿って `wp-load.php` のあるディレクトリを WordPress ルートとみなし、WP-CLI の `home` から取得します（`wp-config.php` は1つ上の階層に置ける構成があるため、ルートの判定には使っていません）。WordPress の外にある `.wpress` は「(WordPress の外)」としてまとめます。
+
+### 出力例
+
+```
+--------------------------------------------------
+サイト: https://a.example.com
+  WP   : /home/example/a.example.com/public_html
+  390.6KB     2026-01-05 12:00  /home/example/a.example.com/public_html/wp-content/ai1wm-backups/a-example-com-20260105-120000-abc123.wpress
+            └ URL: https://a.example.com/wp-content/ai1wm-backups/a-example-com-20260105-120000-abc123.wpress
+  小計: 3 件 / 509.8KB
+--------------------------------------------------
+ドメイン別の .wpress
+     3 件  509.8KB     https://a.example.com
+     1 件  48.8KB      https://sub.b.example.com
+     1 件  4.0KB       (WordPress の外)
+
+合計: 5 件 / 562.6KB
+```
+
+各ファイルには公開 URL を併記します。「ファイル名が分かれば直接ダウンロードできる」状態を、実際の URL で確認できるようにするためです。
+
+### 削除する場合
+
+```bash
+# 削除リストを確認してから削除（yes の入力が必要）
+bash check-wpress.sh /home/example --delete
+
+# 非対話で削除（cron 等）
+bash check-wpress.sh /home/example --delete --yes
+```
+
+**削除は元に戻せません。** 必要なバックアップは手元にダウンロードしてから削除してください。バックアップが繰り返し作られる場合は、プラグイン側の設定も合わせて見直してください。
+
 ## 作成日でファイルを検索（`check-files-by-date-sakura.sh`）
 
 さくらインターネットのレンタルサーバーではドキュメントルートを自由な名前で作成できるため、**ホーム配下（`$HOME`）を丸ごと走査**し、除外フォルダ（既定は `~/log`）以外から、**指定した日付範囲に作成されたファイル**を列挙します。新規アップロードされた不審ファイルの発見を想定しています。
@@ -485,5 +546,6 @@ MIT
 ## 注意事項
 
 - `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` / `check-files-by-date-sakura.sh` / `check-log-and-file-xserver.sh` / `check-cve-2026-87902-sakura.sh` / `check-cve-2026-87902-xserver.sh` / `check-sc.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
+- **`check-wpress.sh` は `--delete` を付けたときだけファイルを削除します。** オプション無しでは一覧と集計のみで、何も変更しません。削除は元に戻せないため、必要なバックアップは先にダウンロードしてください。
 - **`update-wp-all.sh` / `update-minor-wp-all.sh` はサイトを実際に更新します。** 実行前に必ずバックアップを取得し、検証環境で確認してから本番に適用してください。
 - チェックサム検証に失敗した場合は、ファイルが改ざんされている可能性があります。
