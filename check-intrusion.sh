@@ -306,21 +306,46 @@ check_site() {
     if [ -n "$list" ]; then
         info ".htaccess の PHP ハンドラ指定:"
         print_list "$list" 5
+        # x-httpd-php82 / application/x-httpd-php8.2 などから系列（8.2 など）を読む。
+        # 系列までしか分からないが、8.1 以前なら修正版が出ていないので確定で警告できる。
+        local branch
+        branch=$(printf '%s\n' "$list" | grep -o -E 'php-?[0-9]\.?[0-9]' | head -1 |
+            sed -e 's/php-\{0,1\}//' -e 's/^\([0-9]\)\([0-9]\)$/\1.\2/')
+        if [ -n "$branch" ]; then
+            if [ "$(version_ge "$branch" "8.2")" = "1" ]; then
+                info "  └ ハンドラからは PHP ${branch} 系（パッチ版までは分からないため、下の HTTP 確認かサイトヘルスで）"
+            else
+                warn "  └ ハンドラからは PHP ${branch} 系。この系列に修正版は出ていません（8.2 以降へ）"
+            fi
+        fi
     fi
 
     # HTTP ヘッダ（X-Powered-By）が最も確実。自サイトへの HEAD を1回だけ送る。
     if [ "$use_http" -eq 1 ] && [ "$has_curl" -eq 1 ] && [ -n "$home" ]; then
-        out=$(curl -sI -m 10 -A 'check-intrusion.sh' "$home" 2>/dev/null |
-            grep -i '^x-powered-by:' | head -1)
-        if [ -n "$out" ]; then
-            report_php_version "$(extract_ver "$out")" "Web 側（X-Powered-By）"
+        # Web 側の PHP は、その PHP 自身が返すヘッダで見るのが最も確実。
+        # 起動直後のサイトは応答が遅いので 20 秒待ち、1回だけ再試行する
+        # （短いタイムアウトで諦めると「ヘッダが無い」と誤って報告してしまう）。
+        local headers powered
+        headers=$(curl -sI -L -m 20 --retry 1 -A 'check-intrusion.sh' "$home" 2>/dev/null)
+        powered=$(printf '%s\n' "$headers" | grep -i '^x-powered-by:' | head -1)
+        if [ -z "$powered" ] && [ -n "$headers" ]; then
+            # HEAD にヘッダを付けないサーバーがあるため、先頭1バイトだけ GET して再確認する
+            headers=$(curl -s -L -m 20 --retry 1 -D - -o /dev/null -r 0-0 \
+                -A 'check-intrusion.sh' "$home" 2>/dev/null)
+            powered=$(printf '%s\n' "$headers" | grep -i '^x-powered-by:' | head -1)
+        fi
+        if [ -n "$powered" ]; then
+            report_php_version "$(extract_ver "$powered")" "Web 側（X-Powered-By）"
+        elif [ -z "$headers" ]; then
+            info "Web 側: サイトに接続できず判定できませんでした（$home）"
         else
-            info "Web 側: X-Powered-By ヘッダが無く、HTTP からは判定できません"
+            info "Web 側: X-Powered-By が返らないため判定できません（expose_php=Off）"
         fi
     elif [ "$use_http" -eq 0 ]; then
         info "Web 側: --no-http のため HTTP 確認をスキップしました"
     fi
-    info "※ 管理画面の「サイトヘルス」→「サーバー」でも Web 側の PHP バージョンを確認できます"
+    info "※ 判定できない場合は、管理画面の「サイトヘルス」→「サーバー」で確認してください"
+    info "   （WP-CLI の wp eval は CLI の PHP で動くため、Web 側の値にはなりません）"
 
     # --- (2) uploads 内の実行可能ファイル -------------------------------
     # uploads は本来「画像などの置き場」で、PHP が置かれること自体が異常。
