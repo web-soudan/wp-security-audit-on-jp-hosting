@@ -8,6 +8,7 @@
 |---|---|---|
 | `check-wp.sh` | 情報収集 **＋ 改ざん検知**（コア/プラグインの整合性検証） | なし（読み取り専用） |
 | `check-wp-noverify.sh` | 情報収集のみ（整合性検証を省いた軽量・高速版） | なし（読み取り専用） |
+| `check-intrusion.sh` | 侵害の一次トリアージ（PHP バージョン + 改ざん・Web シェル・不審ユーザー） | なし（読み取り専用） |
 | `check-sc.sh` | SC（自己修復型バックドア）の痕跡を検査（ファイル8層 + DB + 共有メモリ） | なし（読み取り専用） |
 | `check-wpress.sh` | All-in-One WP Migration のバックアップ（`.wpress`）をドメイン別に棚卸し | 既定はなし（**`--delete` 指定時のみ削除**） |
 | `update-wp-all.sh` | 情報収集 **＋ 一括アップデート**（コア/プラグイン/テーマ/翻訳） | **あり（更新を実行）** |
@@ -19,6 +20,7 @@
 | `check-cve-2026-87902-xserver.sh` | エックスサーバー向け: 各ドメインのアクセスログ（gz + 未圧縮）から CVE-2026-87902（パストラバーサル）の**攻撃試行痕跡**を検索 | なし（読み取り専用） |
 
 `check-wp.sh` / `check-wp-noverify.sh` / `update-wp-all.sh` / `update-minor-wp-all.sh` は、指定ディレクトリ配下の `wp-config.php` を再帰的に探し、見つかった各 WordPress インストールに対して処理を実行します。
+`check-intrusion.sh` は PHP 本体の RCE（CVE-2026-109618 / 109619）を受けた一次トリアージで、PHP のバージョンと侵害の痕跡をまとめて確認します（→ [侵害の一次トリアージ](#侵害の一次トリアージ-check-intrusionsh)）。
 `check-sc.sh` も同じく `wp-config.php` を再帰的に探し、各サイトで SC（自己修復型バックドア）の痕跡を検査します（→ [SC の痕跡を検索](#sc自己修復型バックドアの痕跡を検索-check-scsh)）。
 `check-wpress.sh` は `.wpress` から上へ辿って WordPress を特定し、公開ドメインごとにバックアップの件数とサイズを集計します（→ [.wpress の棚卸し](#all-in-one-wp-migration-のバックアップwpressを棚卸し-check-wpresssh)）。
 `check-log-and-file-sakura.sh` はさくらインターネットのレンタルサーバーを対象に、ホームフォルダの `~/log/` にある gzip 圧縮アクセスログを検索します（→ [アクセスログの検索](#アクセスログの検索-check-log-and-file-sakurash)）。
@@ -59,6 +61,7 @@
 - 対象 WordPress ディレクトリへの権限
   - `check-wp.sh` / `check-wp-noverify.sh`: 読み取り権限
   - `update-wp-all.sh` / `update-minor-wp-all.sh`: 更新を行うため書き込み権限
+- `check-intrusion.sh` は WP-CLI が**あれば** チェックサム検証と DB 側（管理者・設定）も確認します。チェックサム検証と Web 側 PHP の確認には外部通信が必要です（`--no-http` で省略可）
 - `check-sc.sh` は WP-CLI が**あれば** DB 側（option / 隠し管理者 / cron / DBトリガー）も確認し、無い場合はファイル側のみ確認（`find` / `grep` を使用。共有メモリの確認には `ipcs` があれば使用）
 - `check-wpress.sh` は WP-CLI が**あれば**公開ドメイン（`home`）を表示し、無い場合はパス表示になります（`find` / `awk` を使用）
 - `check-log-and-file-sakura.sh` は WP-CLI 不要（`gzip` / `find` / `grep` を使用）。さくらインターネットのレンタルサーバーを想定
@@ -77,6 +80,9 @@ bash check-wp.sh <検索対象のディレクトリ>
 
 # 情報収集のみ（軽量・高速）
 bash check-wp-noverify.sh <検索対象のディレクトリ>
+
+# 侵害の一次トリアージ（PHP バージョン + 改ざん痕跡）
+bash check-intrusion.sh <検索対象のディレクトリ>
 
 # SC（自己修復型バックドア）の痕跡を検査
 bash check-sc.sh <検索対象のディレクトリ>
@@ -107,6 +113,9 @@ curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hos
 
 # 情報収集のみ
 curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-wp-noverify.sh | bash -s -- /var/www/html/wordpress
+
+# 侵害の一次トリアージ（PHP バージョン + 改ざん痕跡）
+curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-intrusion.sh | bash -s -- /var/www/html/wordpress
 
 # SC（自己修復型バックドア）の痕跡を検査
 curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hosting/refs/heads/main/check-sc.sh | bash -s -- /var/www/html/wordpress
@@ -314,6 +323,59 @@ curl -s https://raw.githubusercontent.com/web-soudan/wp-security-audit-on-jp-hos
 うち高シグナル [!] 行:      1  (pearcmd / php:// 等 / tmp書込 を含む)
 
 => 攻撃の【試行痕跡】が見つかりました。侵害成立の確定ではありません。
+```
+
+## 侵害の一次トリアージ（`check-intrusion.sh`）
+
+PHP エンジン本体の認証不要 RCE（**CVE-2026-109618 / CVE-2026-109619**、[php2shell-poc](https://github.com/ikow/php2shell-poc)）を受けて作成した、一次トリアージ用のスクリプトです。指定ディレクトリ配下の `wp-config.php` を再帰的に探し、各サイトについて「**PHP が塞がっているか**」と「**すでにやられていないか**」をまとめて確認します。読み取り専用で、検出と報告のみを行います。
+
+- 影響: PHP 5.4.0 〜 8.5.11 / 修正版: **8.2.35 / 8.3.36 / 8.4.27 / 8.5.12**
+- 侵入口は `session.upload_progress`（multipart POST の `PHP_SESSION_UPLOAD_PROGRESS`）
+- **アプリ側に脆弱性が無くても成立する**ため、WordPress やプラグインを最新にしても塞がりません
+
+```bash
+bash check-intrusion.sh <検索対象のディレクトリ> [--days N] [--no-http]
+```
+
+| オプション | 動作 |
+|---|---|
+| `--days N` | 「最近」とみなす日数（既定 **3**）。脆弱性公開からの日数に合わせて指定します |
+| `--no-http` | 外部通信を行いません（チェックサム検証と Web 側 PHP の確認を省略） |
+
+### チェック項目
+
+| # | 項目 | 内容 |
+|---|---|---|
+| 0 | サーバーの PHP（CLI） | `php -v` の判定と、`session.upload_progress.enabled` / `session.use_only_cookies` |
+| 1 | サイトの PHP | `.htaccess` のハンドラ指定と、`X-Powered-By` ヘッダから Web 側のバージョンを判定 |
+| 2 | uploads 内の実行可能ファイル | `.php` 等の設置、二重拡張子（`photo.jpg.php`）、画像への PHP 埋め込み |
+| 3 | 本体ファイルの改ざん検証 | `wp core verify-checksums --include-root` と `wp plugin verify-checksums --all` |
+| 3-2 | 直近の変更ファイル | 構成要素単位に集約。少数だけ変わった箇所と、コアディレクトリの変更を抽出 |
+| 4 | 更新日時の偽装 | ctime は新しいのに mtime が古いファイル（`touch` による偽装の手がかり） |
+| 5 | wp-config.php / .htaccess | 更新日時、実行系コードの混入、拡張子偽装・外部転送、パーミッション |
+| 6 | ユーザー・権限・設定 | 管理者一覧、直近に登録された管理者、アプリケーションパスワード、`users_can_register` / `default_role`、`siteurl` と `home` の不一致 |
+
+検出した項目には**それぞれ更新日時を表示**します。
+
+### 誤検知を抑えるための工夫
+
+- **PHP のバージョンは CLI と Web を分けて表示**します。レンタルサーバーでは `php -v`（CLI）と Web の PHP が別バージョンであることが多く、CLI だけを見ると判断を誤ります。
+- **直近の変更ファイルは構成要素単位に畳みます**。プラグインやテーマの更新では数千ファイルが一度に変わるため、そのまま並べても読めません。「どの構成要素が何件変わったか」を示し、**少数しか変わっていない箇所だけ**を個別に出します（ピンポイントの改ざんはそこに現れます）。
+- **更新日時の偽装（#4）は場所で振り分けます**。プラグイン更新は zip を mtime 付きで展開するため正常時も同じ状態になります。更新で説明の付かない場所（サイト直下・uploads）だけを要確認にし、それ以外は参考表示です。
+- **画像内の PHP は `<?php` + 空白、`<?=` + 変数に限定**して判定します。`<?=` の3バイトだけでは PNG/JPEG の圧縮データに偶然現れ、大量に誤検知します。
+- **プラグインのチェックサムは「照合できない」と「差分あり」を分けます**。有料・自作プラグインは wordpress.org に配布物が無いため照合できず、改ざんとは意味が違います。
+- ロケールを `LC_ALL=C` に固定しています。`ja_JP.UTF-8` のままだと BSD grep（さくら等）が不正な UTF-8 を含むファイルに一致せず、PHP を埋め込んだ画像を取りこぼします。
+
+### 検出時の対応順序
+
+1. **PHP を修正版へ**（8.2.35 / 8.3.36 / 8.4.27 / 8.5.12 以降）。すぐに上げられない場合の応急処置は `session.upload_progress.enabled = Off`
+2. 不審なファイル・管理者・アプリケーションパスワードを精査して除去
+3. 認証情報（DB・管理者・API キー・FTP）をローテーション
+
+アクセスログ側の確認は既存のスクリプトを使います。侵入の痕跡は multipart POST の `PHP_SESSION_UPLOAD_PROGRESS` が目印です。
+
+```bash
+bash check-log-and-file-sakura.sh PHP_SESSION_UPLOAD_PROGRESS 30
 ```
 
 ## SC（自己修復型バックドア）の痕跡を検索（`check-sc.sh`）
@@ -546,7 +608,7 @@ MIT
 
 ## 注意事項
 
-- `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` / `check-files-by-date-sakura.sh` / `check-log-and-file-xserver.sh` / `check-cve-2026-87902-sakura.sh` / `check-cve-2026-87902-xserver.sh` / `check-sc.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
+- `check-wp.sh` / `check-wp-noverify.sh` / `check-log-and-file-sakura.sh` / `check-files-by-date-sakura.sh` / `check-log-and-file-xserver.sh` / `check-cve-2026-87902-sakura.sh` / `check-cve-2026-87902-xserver.sh` / `check-sc.sh` / `check-intrusion.sh` は読み取り専用で、WordPress ファイルやデータベース、ログを変更しません。
 - **`check-wpress.sh` は `--delete` を付けたときだけファイルを削除します。** オプション無しでは一覧と集計のみで、何も変更しません。削除は元に戻せないため、必要なバックアップは先にダウンロードしてください。
 - **`update-wp-all.sh` / `update-minor-wp-all.sh` はサイトを実際に更新します。** 実行前に必ずバックアップを取得し、検証環境で確認してから本番に適用してください。
 - チェックサム検証に失敗した場合は、ファイルが改ざんされている可能性があります。
