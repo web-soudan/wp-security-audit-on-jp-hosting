@@ -366,6 +366,79 @@ bash check-intrusion.sh <検索対象のディレクトリ> [--days N] [--no-htt
 - **プラグインのチェックサムは「照合できない」と「差分あり」を分けます**。有料・自作プラグインは wordpress.org に配布物が無いため照合できず、改ざんとは意味が違います。
 - ロケールを `LC_ALL=C` に固定しています。`ja_JP.UTF-8` のままだと BSD grep（さくら等）が不正な UTF-8 を含むファイルに一致せず、PHP を埋め込んだ画像を取りこぼします。
 
+### 出力例
+
+```
+対象:       WordPress の侵害チェック（CVE-2026-109618 / 109619 を含む）
+走査対象:   /home/example
+対象サイト: 2 件
+「最近」の定義: 直近 3 日
+WP-CLI:     検出（DB 側も確認します）
+--------------------------------------------------
+[0] サーバーの PHP（CLI）と緩和設定
+[!] CLI（php -v）: PHP 8.3.35 は未修正です（修正版: 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12）
+[!] session.upload_progress.enabled = On（CLI 基準）。侵入口になるため Off を推奨
+--------------------------------------------------
+WordPress   : /home/example/example.com/public_html
+SiteURL     : https://example.com
+WP Version  : 7.1.2
+
+[1] このサイトの PHP バージョン
+[i] .htaccess の PHP ハンドラ指定:
+      AddHandler x-httpd-php82 .php
+[!] Web 側（X-Powered-By）: PHP 8.2.34 は未修正です（修正版: 8.2.35 / ...）
+
+[2] uploads 内の実行可能ファイル
+[!] uploads に実行可能ファイルがあります（Web シェル設置の典型）
+      2026-10-21 03:14  /home/example/example.com/public_html/wp-content/uploads/2026/10/shell.php
+[!] 画像などを装った二重拡張子のファイルがあります
+      2026-10-21 03:14  /home/example/example.com/public_html/wp-content/uploads/2026/10/photo.jpg.php
+
+[3] 本体ファイルの改ざん検証（チェックサム）
+[!] コアのチェックサム検証で差分があります（改変・欠落・本体に無いファイル）
+      Warning: File doesn't exist: wp-admin/includes/update-core-helper.php
+[i] プラグイン: 照合できた範囲で差分なし
+[i]   └ 12 件は wordpress.org 配布でないため照合できません（有料・自作プラグイン）
+
+[3-2] 直近 3 日に変更されたファイル（uploads・キャッシュを除く）
+[i] 変更のあった構成要素（直近 3 日）:
+         412 件  wp-content/themes/mytheme/
+           1 件  wp-config.php
+           1 件  wp-admin/
+[!] 少数のファイルだけが変更された箇所があります（更新作業で説明が付かない場合は要確認）
+      2026-10-21 03:14  /home/example/example.com/public_html/wp-config.php
+
+[4] 更新日時を偽装された疑いのあるファイル（ctime は最近 / mtime は古い）
+[!] サイト直下や uploads に、mtime が古いまま ctime だけ新しい PHP があります（touch による偽装の疑い）
+      2025-04-02 11:20  /home/example/example.com/public_html/wp-content/uploads/2025/04/cache.php
+
+[5] wp-config.php と .htaccess
+  2026-10-21 03:14  /home/example/example.com/public_html/wp-config.php
+[!] wp-config.php に不審なコードがあります: /home/example/example.com/public_html/wp-config.php
+      4:@eval(base64_decode($_POST['x'] ?? ''));
+[!] .htaccess に不審な指定があります（拡張子偽装・外部転送・PHP 設定の上書き）
+      2:AddType application/x-httpd-php .jpg
+
+[6] ユーザー・権限・サイト設定
+  - 管理者アカウント一覧:
+      ID	user_login	user_email	user_registered
+      1	admin	admin@example.com	2024-05-01 09:12:33
+      42	wp_support	support@example.net	2026-10-21 03:10:52
+[!] 直近 3 日に登録された管理者がいます
+      2026-10-21 03:10:52  wp_support  support@example.net
+[!] アプリケーションパスワードが登録されています（パスワード変更後も有効。心当たりが無ければ失効を）
+      wp_support  作成:2026-10-21  最終使用:2026-10-21  api
+--------------------------------------------------
+検査したサイト: 2 件
+  [!]    2 件  （ホスト全体: PHP バージョンなど）
+  [!]    9 件  /home/example/example.com/public_html
+  [ ]    0 件  /home/example/other.example.jp/public_html
+
+要確認として検出した項目: 11 件（検出のあったサイト: 1 / 2）
+```
+
+`[!]` の行は端末では赤の太字で表示されます（ファイルやパイプに流すときは制御文字を出力しません。`NO_COLOR=1` でも無効化できます）。
+
 ### 検出時の対応順序
 
 1. **PHP を修正版へ**（8.2.35 / 8.3.36 / 8.4.27 / 8.5.12 以降）。すぐに上げられない場合の応急処置は `session.upload_progress.enabled = Off`
